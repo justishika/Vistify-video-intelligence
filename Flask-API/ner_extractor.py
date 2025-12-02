@@ -12,6 +12,36 @@ from typing import Dict, List, Tuple, Any
 # Global variable to store loaded model
 nlp_model = None
 
+# Common false positives to ignore
+IGNORE_LIST = {
+    'youtube', 'video', 'channel', 'subscribe', 'like', 'comment', 'guys', 'hey', 'hello', 
+    'today', 'tomorrow', 'yesterday', 'now', 'then', 'here', 'there', 'this', 'that',
+    'one', 'two', 'three', 'first', 'second', 'third', 'example', 'thing', 'way', 'lot',
+    'bit', 'kind', 'sort', 'part', 'side', 'top', 'bottom', 'left', 'right', 'front', 'back',
+    'poll', 'percentage', 'number', 'point', 'points'
+}
+
+# Known entities to force-correct (spaCy small model often mistakes these)
+ENTITY_CORRECTIONS = {
+    'obama': 'PERSON',
+    'barack obama': 'PERSON',
+    'biden': 'PERSON',
+    'joe biden': 'PERSON',
+    'trump': 'PERSON',
+    'donald trump': 'PERSON',
+    'clinton': 'PERSON',
+    'hillary clinton': 'PERSON',
+    'bush': 'PERSON',
+    'george bush': 'PERSON',
+    'america': 'GPE',
+    'usa': 'GPE',
+    'us': 'GPE',
+    'united states': 'GPE',
+    'white house': 'ORG',
+    'congress': 'ORG',
+    'senate': 'ORG'
+}
+
 def load_ner_model():
     """Load spaCy NER model. Downloads if not available."""
     global nlp_model
@@ -36,6 +66,8 @@ def extract_entities(transcript: str) -> Dict[str, List[Dict[str, Any]]]:
     Returns entities grouped by type.
     """
     nlp = load_ner_model()
+    # Increase max length for large transcripts
+    nlp.max_length = 2000000 
     doc = nlp(transcript)
     
     entities = {
@@ -54,11 +86,34 @@ def extract_entities(transcript: str) -> Dict[str, List[Dict[str, Any]]]:
         'NORP': []  # Nationalities or religious or political groups
     }
     
+    # First pass: Count frequencies to filter noise
+    entity_counts = Counter()
+    for ent in doc.ents:
+        clean_text = ent.text.strip().lower()
+        if len(clean_text) > 2 and clean_text not in IGNORE_LIST:
+            entity_counts[clean_text] += 1
+            
     seen_entities = set()
     
     for ent in doc.ents:
         entity_text = ent.text.strip()
-        entity_key = f"{ent.label_}:{entity_text.lower()}"
+        clean_text = entity_text.lower()
+        
+        # Filter noise
+        if len(clean_text) <= 2 or clean_text in IGNORE_LIST:
+            continue
+            
+        # For common types, require frequency > 1 unless it's a short transcript
+        if len(transcript) > 5000 and ent.label_ not in ['GPE', 'LOC', 'DATE', 'TIME', 'MONEY']:
+             if entity_counts[clean_text] < 2:
+                 continue
+
+        # CORRECT MISCLASSIFICATIONS
+        label = ent.label_
+        if clean_text in ENTITY_CORRECTIONS:
+            label = ENTITY_CORRECTIONS[clean_text]
+
+        entity_key = f"{label}:{clean_text}"
         
         # Avoid duplicates
         if entity_key in seen_entities:
@@ -67,40 +122,23 @@ def extract_entities(transcript: str) -> Dict[str, List[Dict[str, Any]]]:
         
         entity_info = {
             'text': entity_text,
-            'label': ent.label_,
+            'label': label,
             'start': ent.start_char,
             'end': ent.end_char,
-            'description': spacy.explain(ent.label_) or ent.label_
+            'description': spacy.explain(label) or label,
+            'count': entity_counts[clean_text]
         }
         
         # Map spaCy labels to our categories
-        if ent.label_ == 'PERSON':
-            entities['PERSON'].append(entity_info)
-        elif ent.label_ in ['ORG', 'ORGANIZATION']:
-            entities['ORG'].append(entity_info)
-        elif ent.label_ == 'GPE':
-            entities['GPE'].append(entity_info)
-        elif ent.label_ == 'LOC':
-            entities['LOC'].append(entity_info)
-        elif ent.label_ == 'DATE':
-            entities['DATE'].append(entity_info)
-        elif ent.label_ == 'TIME':
-            entities['TIME'].append(entity_info)
-        elif ent.label_ == 'MONEY':
-            entities['MONEY'].append(entity_info)
-        elif ent.label_ == 'PERCENT':
-            entities['PERCENT'].append(entity_info)
-        elif ent.label_ == 'EVENT':
-            entities['EVENT'].append(entity_info)
-        elif ent.label_ == 'PRODUCT':
-            entities['PRODUCT'].append(entity_info)
-        elif ent.label_ == 'LAW':
-            entities['LAW'].append(entity_info)
-        elif ent.label_ == 'LANGUAGE':
-            entities['LANGUAGE'].append(entity_info)
-        elif ent.label_ == 'NORP':
-            entities['NORP'].append(entity_info)
+        if label in entities:
+             entities[label].append(entity_info)
+        elif label == 'ORGANIZATION': # Handle alias
+             entities['ORG'].append(entity_info)
     
+    # Sort by frequency
+    for key in entities:
+        entities[key].sort(key=lambda x: x['count'], reverse=True)
+
     # Remove empty categories
     return {k: v for k, v in entities.items() if v}
 
@@ -118,7 +156,7 @@ def extract_timeline(transcript: str) -> List[Dict[str, Any]]:
     for ent in doc.ents:
         if ent.label_ == 'DATE':
             date_text = ent.text.strip()
-            if date_text.lower() in seen_dates:
+            if date_text.lower() in seen_dates or date_text.lower() in IGNORE_LIST:
                 continue
             seen_dates.add(date_text.lower())
             
@@ -141,8 +179,6 @@ def extract_key_facts(transcript: str, entities: Dict[str, List[Dict[str, Any]]]
     """
     Extract key facts from transcript using entities and patterns.
     """
-    nlp = load_ner_model()
-    doc = nlp(transcript)
     
     facts = {
         'people_mentioned': len(entities.get('PERSON', [])),
@@ -154,20 +190,19 @@ def extract_key_facts(transcript: str, entities: Dict[str, List[Dict[str, Any]]]
         'top_locations': []
     }
     
-    # Get most mentioned people
-    person_counts = Counter([e['text'] for e in entities.get('PERSON', [])])
-    facts['top_people'] = [{'name': name, 'mentions': count} 
-                          for name, count in person_counts.most_common(5)]
+    # Get most mentioned people (already sorted by count)
+    facts['top_people'] = [{'name': e['text'], 'mentions': e['count']} 
+                          for e in entities.get('PERSON', [])[:5]]
     
     # Get most mentioned organizations
-    org_counts = Counter([e['text'] for e in entities.get('ORG', [])])
-    facts['top_organizations'] = [{'name': name, 'mentions': count} 
-                                 for name, count in org_counts.most_common(5)]
+    facts['top_organizations'] = [{'name': e['text'], 'mentions': e['count']} 
+                                 for e in entities.get('ORG', [])[:5]]
     
     # Get most mentioned locations
-    location_counts = Counter([e['text'] for e in entities.get('GPE', []) + entities.get('LOC', [])])
-    facts['top_locations'] = [{'name': name, 'mentions': count} 
-                             for name, count in location_counts.most_common(5)]
+    locs = entities.get('GPE', []) + entities.get('LOC', [])
+    locs.sort(key=lambda x: x['count'], reverse=True)
+    facts['top_locations'] = [{'name': e['text'], 'mentions': e['count']} 
+                             for e in locs[:5]]
     
     # Extract numbers and statistics
     numbers = re.findall(r'\b\d+(?:,\d{3})*(?:\.\d+)?\b', transcript)
@@ -191,6 +226,16 @@ def extract_relationships(transcript: str, entities: Dict[str, List[Dict[str, An
     orgs = [e['text'] for e in entities.get('ORG', [])]
     locations = [e['text'] for e in entities.get('GPE', []) + entities.get('LOC', [])]
     
+    # Helper to check if relationship is valid
+    def is_valid_relationship(e1, e2):
+        s1 = e1.lower()
+        s2 = e2.lower()
+        # Prevent self-loops
+        if s1 == s2: return False
+        # Prevent substring matches (e.g. "Trump" -> "Donald Trump")
+        if s1 in s2 or s2 in s1: return False
+        return True
+
     # Find co-occurrences in sentences
     for sent in doc.sents:
         sent_text = sent.text
@@ -201,32 +246,35 @@ def extract_relationships(transcript: str, entities: Dict[str, List[Dict[str, An
         # Person-Organization relationships
         for person in sent_people:
             for org in sent_orgs:
-                relationships.append({
-                    'type': 'PERSON-ORG',
-                    'entity1': person,
-                    'entity2': org,
-                    'context': sent_text[:200]  # First 200 chars of sentence
-                })
+                if is_valid_relationship(person, org):
+                    relationships.append({
+                        'type': 'PERSON-ORG',
+                        'entity1': person,
+                        'entity2': org,
+                        'context': sent_text[:200]
+                    })
         
         # Person-Location relationships
         for person in sent_people:
             for loc in sent_locations:
-                relationships.append({
-                    'type': 'PERSON-LOC',
-                    'entity1': person,
-                    'entity2': loc,
-                    'context': sent_text[:200]
-                })
+                if is_valid_relationship(person, loc):
+                    relationships.append({
+                        'type': 'PERSON-LOC',
+                        'entity1': person,
+                        'entity2': loc,
+                        'context': sent_text[:200]
+                    })
         
         # Organization-Location relationships
         for org in sent_orgs:
             for loc in sent_locations:
-                relationships.append({
-                    'type': 'ORG-LOC',
-                    'entity1': org,
-                    'entity2': loc,
-                    'context': sent_text[:200]
-                })
+                if is_valid_relationship(org, loc):
+                    relationships.append({
+                        'type': 'ORG-LOC',
+                        'entity1': org,
+                        'entity2': loc,
+                        'context': sent_text[:200]
+                    })
     
     # Remove duplicates
     seen = set()
@@ -261,4 +309,3 @@ def process_transcript(transcript: str) -> Dict[str, Any]:
             'success': False,
             'error': str(e)
         }
-

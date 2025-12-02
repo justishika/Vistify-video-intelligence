@@ -15,12 +15,12 @@ export const state = {
 export const loadSummary = async function (summaryType = 'short') {
     try {
         const data = await getJSON(`${API_URL}/summary?v=${state.videoId}&type=${summaryType}`);
-        
+
         // Check if the response has an error
         if (data.error) {
             throw new Error(data.data || "Unable to Summarize the video");
         }
-        
+
         state.summary = data.data;
     } catch (err) {
         throw err;
@@ -45,21 +45,22 @@ export const askQuestion = async function (question) {
             question: question,
             history: state.conversationHistory
         });
-        
+
         if (response.data.error) {
             throw new Error(response.data.data);
         }
-        
+
         const answer = response.data.data;
-        
+        const metrics = response.data.metrics;
+
         // Add to conversation history
         state.conversationHistory.push({
             question: question,
             answer: answer,
             timestamp: new Date().toISOString()
         });
-        
-        return answer;
+
+        return { answer, metrics };
     } catch (err) {
         throw err;
     }
@@ -78,11 +79,11 @@ export const loadInsights = async function () {
 export const extractEntities = async function () {
     try {
         const data = await getJSON(`${API_URL}/extract-entities?v=${state.videoId}`);
-        
+
         if (data.error) {
             throw new Error(data.data || "Unable to extract entities");
         }
-        
+
         return data.data;
     } catch (err) {
         throw err;

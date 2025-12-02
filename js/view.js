@@ -43,30 +43,30 @@ export const renderSpinnerSummary = function () {
 
 export const renderSummary = function () {
     clear(summaryParent);
-    
+
     // Better formatting for summary text
     // Note: Summary comes from our trusted backend, so we can safely format it
     let formattedSummary = state.summary;
-    
+
     // Handle headings (lines that are all caps or start with ## or are short and bold-looking)
     formattedSummary = formattedSummary.replace(/^##\s*(.+)$/gm, '<h3 class="summary-heading">$1</h3>');
     formattedSummary = formattedSummary.replace(/^###\s*(.+)$/gm, '<h4 class="summary-subheading">$1</h4>');
-    
+
     // Handle markdown-style bold text (**text**)
     formattedSummary = formattedSummary.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    
+
     // Handle italic text (*text*)
     formattedSummary = formattedSummary.replace(/(?<!\*)\*([^*]+?)\*(?!\*)/g, '<em>$1</em>');
-    
+
     // Split into lines for processing
     const lines = formattedSummary.split('\n');
     const processedLines = [];
     let inParagraph = false;
     let inList = false;
-    
+
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
-        
+
         if (!line) {
             // Empty line - close paragraph/list if open
             if (inParagraph) {
@@ -79,7 +79,7 @@ export const renderSummary = function () {
             }
             continue;
         }
-        
+
         // Check for markdown headings
         if (line.match(/^##\s+(.+)$/)) {
             if (inParagraph) {
@@ -181,7 +181,7 @@ export const renderSummary = function () {
             processedLines.push(line + '<br>');
         }
     }
-    
+
     // Close last paragraph/list if open
     if (inParagraph) {
         processedLines.push('</p>');
@@ -189,9 +189,9 @@ export const renderSummary = function () {
     if (inList) {
         processedLines.push('</ul>');
     }
-    
+
     formattedSummary = processedLines.join('');
-    
+
     const markup = `
         <div class="summary">
             <h2>Video Summary:</h2>
@@ -255,20 +255,20 @@ export const renderSummary = function () {
                 </div>
             </div>
         </div>`;
-    
+
     summaryParent.insertAdjacentHTML("afterbegin", markup);
 };
 
 export const renderQAToggle = function (handler) {
     const toggleBtn = document.querySelector("#qa-toggle");
     const qaContainer = document.querySelector("#qa-container");
-    
+
     if (toggleBtn && qaContainer) {
         toggleBtn.addEventListener("click", function () {
             const isVisible = qaContainer.style.display !== "none";
             qaContainer.style.display = isVisible ? "none" : "block";
             toggleBtn.textContent = isVisible ? "Ask Questions About This Video" : "Hide Q&A";
-            
+
             // Add icon back
             if (isVisible) {
                 toggleBtn.innerHTML = `
@@ -289,12 +289,12 @@ export const renderQAToggle = function (handler) {
 
 export const addQAHandlers = function (askHandler, clearHandler, insightsHandler) {
     renderQAToggle();
-    
+
     const sendBtn = document.querySelector("#btn-send");
     const qaInput = document.querySelector("#qa-input");
     const clearBtn = document.querySelector("#btn-clear");
     const insightsBtn = document.querySelector("#btn-insights");
-    
+
     if (sendBtn && qaInput) {
         const handleSend = function () {
             const question = qaInput.value.trim();
@@ -303,7 +303,7 @@ export const addQAHandlers = function (askHandler, clearHandler, insightsHandler
                 qaInput.value = "";
             }
         };
-        
+
         sendBtn.addEventListener("click", handleSend);
         qaInput.addEventListener("keypress", function (e) {
             if (e.key === "Enter") {
@@ -311,11 +311,11 @@ export const addQAHandlers = function (askHandler, clearHandler, insightsHandler
             }
         });
     }
-    
+
     if (clearBtn) {
         clearBtn.addEventListener("click", clearHandler);
     }
-    
+
     if (insightsBtn) {
         insightsBtn.addEventListener("click", insightsHandler);
     }
@@ -324,7 +324,7 @@ export const addQAHandlers = function (askHandler, clearHandler, insightsHandler
 export const renderQuestion = function (question) {
     const conversation = document.querySelector("#conversation");
     if (!conversation) return;
-    
+
     const markup = `
         <div class="message user-message">
             <div class="message-content">${escapeHtml(question)}</div>
@@ -337,25 +337,38 @@ export const renderQuestion = function (question) {
             </div>
         </div>
     `;
-    
+
     conversation.insertAdjacentHTML("beforeend", markup);
     conversation.scrollTop = conversation.scrollHeight;
 };
 
-export const renderAnswer = function (answer) {
+export const renderAnswer = function (answer, metrics) {
     const conversation = document.querySelector("#conversation");
     if (!conversation) return;
-    
+
     const messages = conversation.querySelectorAll(".ai-message");
     const lastMessage = messages[messages.length - 1];
-    
+
     if (lastMessage) {
         const formattedAnswer = answer
             .replace(/\n/g, "<br>")
             .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
             .replace(/\*(.*?)\*/g, "<em>$1</em>");
-        
-        lastMessage.querySelector(".message-content").innerHTML = formattedAnswer;
+
+        let metricsMarkup = '';
+        if (metrics) {
+            metricsMarkup = `
+                <div class="metrics-container" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 0.8rem; color: #aaa;">
+                    <div style="display: flex; gap: 15px;">
+                        <span title="Cosine Similarity of Query vs Context">🔍 Retrieval: <strong>${(metrics.retrieval_score * 100).toFixed(1)}%</strong></span>
+                        <span title="Word Overlap of Answer vs Context">✅ Faithfulness: <strong>${(metrics.faithfulness * 100).toFixed(1)}%</strong></span>
+                        <span title="Time taken">⏱️ Latency: <strong>${metrics.latency}s</strong></span>
+                    </div>
+                </div>
+            `;
+        }
+
+        lastMessage.querySelector(".message-content").innerHTML = formattedAnswer + metricsMarkup;
         conversation.scrollTop = conversation.scrollHeight;
     }
 };
@@ -370,12 +383,12 @@ export const clearConversation = function () {
 export const renderInsights = function (insights) {
     const insightsContent = document.querySelector("#insights-content");
     if (!insightsContent) return;
-    
+
     const formattedInsights = insights
         .replace(/\n/g, "<br>")
         .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
         .replace(/\*(.*?)\*/g, "<em>$1</em>");
-    
+
     insightsContent.innerHTML = `
         <div class="insights-box">
             ${formattedInsights}
@@ -407,10 +420,10 @@ export const renderError = function (errorMessage) {
 export const renderQAError = function (errorMessage) {
     const conversation = document.querySelector("#conversation");
     if (!conversation) return;
-    
+
     const messages = conversation.querySelectorAll(".ai-message");
     const lastMessage = messages[messages.length - 1];
-    
+
     if (lastMessage) {
         lastMessage.querySelector(".message-content").innerHTML = `
             <span style="color: #fca5a5;">❌ ${escapeHtml(errorMessage)}</span>
@@ -438,13 +451,13 @@ export const hideNERLoading = function () {
 export const renderNERData = function (nerData) {
     const nerContent = document.getElementById("ner-content");
     if (!nerContent) return;
-    
+
     hideNERLoading();
-    
+
     const { entities, timeline, key_facts, relationships } = nerData;
-    
+
     let markup = '<div class="ner-display">';
-    
+
     // Key Facts Section
     if (key_facts) {
         markup += `
@@ -498,7 +511,7 @@ export const renderNERData = function (nerData) {
             </div>
         `;
     }
-    
+
     // Entities Section
     if (entities && Object.keys(entities).length > 0) {
         markup += `
@@ -506,7 +519,7 @@ export const renderNERData = function (nerData) {
                 <h3 class="ner-section-title">🏷️ Named Entities</h3>
                 <div class="entities-grid">
         `;
-        
+
         for (const [entityType, entityList] of Object.entries(entities)) {
             if (entityList.length > 0) {
                 markup += `
@@ -520,10 +533,10 @@ export const renderNERData = function (nerData) {
                 `;
             }
         }
-        
+
         markup += `</div></div>`;
     }
-    
+
     // Timeline Section
     if (timeline && timeline.length > 0) {
         markup += `
@@ -533,7 +546,7 @@ export const renderNERData = function (nerData) {
                     ${timeline.slice(0, 10).map(item => `
                         <div class="timeline-item">
                             <div class="timeline-date">${escapeHtml(item.date)}</div>
-                            <div class="timeline-context">${escapeHtml(item.context.substring(0, 150))}${item.context.length > 150 ? '...' : ''}</div>
+                            <div class="timeline-context">${escapeHtml(item.context)}</div>
                         </div>
                     `).join('')}
                     ${timeline.length > 10 ? `<div class="timeline-more">+${timeline.length - 10} more dates</div>` : ''}
@@ -541,7 +554,7 @@ export const renderNERData = function (nerData) {
             </div>
         `;
     }
-    
+
     // Relationships Section
     if (relationships && relationships.length > 0) {
         markup += `
@@ -556,7 +569,7 @@ export const renderNERData = function (nerData) {
                                 <span class="rel-arrow">→</span>
                                 <span class="rel-entity">${escapeHtml(rel.entity2)}</span>
                             </div>
-                            <div class="relationship-context">${escapeHtml(rel.context.substring(0, 100))}${rel.context.length > 100 ? '...' : ''}</div>
+                            <div class="relationship-context">${escapeHtml(rel.context)}</div>
                         </div>
                     `).join('')}
                     ${relationships.length > 10 ? `<div class="relationships-more">+${relationships.length - 10} more relationships</div>` : ''}
@@ -564,10 +577,10 @@ export const renderNERData = function (nerData) {
             </div>
         `;
     }
-    
+
     markup += '</div>';
     nerContent.innerHTML = markup;
-    
+
     // Show the container
     const nerContainer = document.getElementById("ner-container");
     if (nerContainer) {
@@ -578,7 +591,7 @@ export const renderNERData = function (nerData) {
 export const addNERHandler = function (handler) {
     const nerToggle = document.getElementById("ner-toggle");
     const nerContainer = document.getElementById("ner-container");
-    
+
     if (nerToggle && nerContainer) {
         nerToggle.addEventListener("click", function () {
             const isVisible = nerContainer.style.display !== "none";
@@ -623,15 +636,22 @@ function getRelationshipTypeLabel(type) {
 }
 
 export const addHandlerSearch = function (handler) {
-    button1.addEventListener("click", function (e) {
-        e.preventDefault();
-        handler('short');
-    });
-    
-    button2.addEventListener("click", function (e) {
-        e.preventDefault();
-        handler('detailed');
-    });
+    const button1 = document.querySelector("#button1");
+    const button2 = document.querySelector("#button2");
+
+    if (button1) {
+        button1.addEventListener("click", function (e) {
+            e.preventDefault();
+            handler('short');
+        });
+    }
+
+    if (button2) {
+        button2.addEventListener("click", function (e) {
+            e.preventDefault();
+            handler('detailed');
+        });
+    }
 };
 
 function escapeHtml(text) {

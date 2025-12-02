@@ -1,6 +1,7 @@
 Flask
-Gunicorn
-google-generativeai
-youtube-transcript-api
 Flask-Cors
-spacy
+youtube-transcript-api
+google-generativeai
+scikit-learn
+numpy
+waitress
