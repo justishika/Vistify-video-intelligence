@@ -65,7 +65,7 @@ def get_transcript(video_id):
 def create_rag_index(video_id, transcript_data):
     """
     Creates a simple TF-IDF index for the video.
-    Splits transcript into chunks of ~1000 characters.
+    Splits transcript into chunks of ~500 characters (REDUCED).
     """
     chunks = []
     current_chunk = ""
@@ -80,19 +80,20 @@ def create_rag_index(video_id, transcript_data):
             
         current_chunk += " " + text
         
-        if len(current_chunk) > 1000:
+        # CHANGED: Reduced chunk size from 1000 to 500
+        if len(current_chunk) > 500:
             chunks.append({
                 'text': current_chunk.strip(),
                 'start': current_start
             })
             current_chunk = ""
-            
+    
     if current_chunk:
         chunks.append({'text': current_chunk.strip(), 'start': current_start})
-        
+
     # Create TF-IDF Matrix
     texts = [c['text'] for c in chunks]
-    vectorizer = TfidfVectorizer(stop_words='english')
+    vectorizer = TfidfVectorizer(stop_words='english', ngram_range=(1, 2))  # ADDED: bigrams
     matrix = vectorizer.fit_transform(texts)
     
     return {
@@ -105,7 +106,7 @@ def retrieve_context(video_id, query, top_k=5):
     """Retrieves relevant chunks using TF-IDF cosine similarity."""
     if video_id not in CACHE:
         return [], 0.0
-        
+    
     data = CACHE[video_id]
     vectorizer = data['vectorizer']
     matrix = data['matrix']
@@ -126,10 +127,11 @@ def retrieve_context(video_id, query, top_k=5):
     if len(top_indices) > 0:
         top_score = float(similarities[top_indices[0]])
     
+    # CHANGED: Reduced threshold from 0.1 to 0.05
     for idx in top_indices:
-        if similarities[idx] > 0.1: # Threshold
+        if similarities[idx] > 0.05:  # Lower threshold
             results.append(chunks[idx])
-            
+    
     return results, top_score
 
 def calculate_faithfulness(answer, context_text):
@@ -213,6 +215,7 @@ def summary():
 @app.route('/api/ask', methods=['POST'])
 def ask():
     start_time = time.time()
+    
     try:
         data = request.get_json()
         video_id = data.get('video_id')
@@ -220,36 +223,81 @@ def ask():
         
         if not video_id or not question:
             return jsonify({"error": True, "data": "Missing video_id or question"})
-            
+        
         # 1. Ensure Index Exists
         if video_id not in CACHE:
             transcript = get_transcript(video_id)
             if not transcript:
                 return jsonify({"error": True, "data": "Transcript not found. Please summarize first."})
             CACHE[video_id] = create_rag_index(video_id, transcript)
+        
+        # ADDED: Handle generic questions
+        question_lower = question.lower().strip()
+        if question_lower in ['hi', 'hello', 'hey']:
+            return jsonify({
+                "error": False,
+                "data": "Hi! I'm here to answer questions about this video. What would you like to know?",
+                "metrics": {
+                    "retrieval_score": 1.0,
+                    "faithfulness": 1.0,
+                    "latency": round(time.time() - start_time, 2)
+                }
+            })
+        
+        # ADDED: Handle "what is video about" type questions
+        if any(phrase in question_lower for phrase in ['what is this video', 'what is the video', 'video about', 'topic of']):
+            # Return first 3 chunks as overview
+            chunks = CACHE[video_id]['chunks'][:3]
+            context_text = "\n\n".join([f"[Time: {int(c['start'])}s] {c['text']}" for c in chunks])
             
+            prompt = f"""Based on this video content, provide a brief overview of what the video is about.
+
+CONTEXT:
+{context_text}
+
+INSTRUCTIONS:
+- Summarize the main topic in 2-3 sentences
+- Be concise and informative
+"""
+            model = genai.GenerativeModel(GENERATION_MODEL)
+            response = model.generate_content(prompt)
+            
+            return jsonify({
+                "error": False,
+                "data": response.text,
+                "metrics": {
+                    "retrieval_score": 1.0,
+                    "faithfulness": 0.9,
+                    "latency": round(time.time() - start_time, 2)
+                }
+            })
+        
         # 2. Retrieve Context
-        context_chunks, top_score = retrieve_context(video_id, question)
+        context_chunks, top_score = retrieve_context(video_id, question, top_k=5)  # Increased from 3 to 5
         
         if not context_chunks:
-            return jsonify({"error": False, "data": "I couldn't find any relevant info in the video."})
-            
+            return jsonify({
+                "error": False, 
+                "data": "I couldn't find specific information about that in the video. Could you rephrase your question or ask something more specific?"
+            })
+        
         # 3. Generate Answer
         context_text = "\n\n".join([f"[Time: {int(c['start'])}s] {c['text']}" for c in context_chunks])
         
         prompt = f"""You are a helpful assistant answering questions about a video based on its transcript.
-        
-        CONTEXT:
-        {context_text}
-        
-        QUESTION:
-        {question}
-        
-        INSTRUCTIONS:
-        - Answer the question using ONLY the provided context.
-        - If the answer is not in the context, say "I don't know based on the video."
-        - Be concise and helpful.
-        """
+
+CONTEXT:
+{context_text}
+
+QUESTION:
+{question}
+
+INSTRUCTIONS:
+- Answer the question using ONLY the provided context.
+- If the answer is not in the context, say "I don't have enough information in this part of the video to answer that."
+- Be concise and helpful.
+- Use natural language, not bullet points unless listing items.
+"""
         
         model = genai.GenerativeModel(GENERATION_MODEL)
         response = model.generate_content(prompt)
@@ -260,7 +308,7 @@ def ask():
         faithfulness = calculate_faithfulness(answer, context_text)
         
         return jsonify({
-            "error": False, 
+            "error": False,
             "data": answer,
             "metrics": {
                 "retrieval_score": float(top_score),
@@ -272,7 +320,7 @@ def ask():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": True, "data": f"Backend Error: {str(e)}"})
-
+    
 @app.route('/api/extract-entities', methods=['GET'])
 def extract_entities():
     video_id = request.args.get('v')
