@@ -72,7 +72,7 @@ The NER system is built on top of **spaCy** (`en_core_web_sm`) and implements a 
 
 ### 1. Clone & Install
 ```bash
-git clone https://github.com/justishika/Video-Gist-Generator.git
+git clone https://github.com/justishika/Vistify-video-intelligence.git
 cd Video-Gist-Generator
 ```
 
